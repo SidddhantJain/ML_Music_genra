@@ -14,7 +14,6 @@ print(os.listdir())
 df = pd.read_csv("/content/features_30_sec.csv")
 print(df.head())
 
-!pip install streamlit pandas numpy matplotlib seaborn scikit-learn librosa
 
 import streamlit as st
 import pandas as pd
