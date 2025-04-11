@@ -113,7 +113,7 @@ if uploaded_file is not None:
     if st.button("Predict Genre"):
         pred = model.predict(features_scaled)
         genre = encoder.inverse_transform(pred)[0]
-                st.balloons()
+    st.balloons()
         st.success(f"🎧 Predicted Genre: **{genre.upper()}**")
 
         # Add fun fact
