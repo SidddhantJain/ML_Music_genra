@@ -41,13 +41,9 @@ def extract_features_from_audio(y, sr):
     mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=20)
     features.extend([np.mean(mfcc[i]) for i in range(20)])
 
-    return np.array(features).reshape(1, -1), features  # Returning full feature list
+    return np.array(features).reshape(1, -1), features  # scaled, raw
 
-# Streamlit UI
-st.set_page_config(page_title="🎶 Music Genre Classifier", layout="centered")
-st.title("🎵 Music Genre Classifier App")
-st.write("Upload a `.wav` file and choose a model to predict the music genre.")
-# Genre fun facts / definitions
+# Fun facts per genre
 genre_facts = {
     "rock": "🎸 Rock music often revolves around the electric guitar, and it originated in the 1950s.",
     "pop": "🎤 Pop music is catchy and often features simple lyrics and strong rhythms.",
@@ -61,27 +57,30 @@ genre_facts = {
     "disco": "🕺 Disco is dance music from the 1970s with four-on-the-floor beats and funky basslines."
 }
 
-# Initialize past prediction history
+# Page config
+st.set_page_config(page_title="🎶 Music Genre Classifier", layout="centered")
+st.title("🎵 Music Genre Classifier App")
+st.write("Upload a `.wav` file and choose a model to predict the music genre.")
+
+# Session state for prediction history
 if "history" not in st.session_state:
     st.session_state.history = []
 
-
-
-
+# Upload audio
 uploaded_file = st.file_uploader("Upload an audio file", type=["wav"])
 
 if uploaded_file is not None:
     y, sr = librosa.load(uploaded_file, sr=None)
     st.audio(uploaded_file, format='audio/wav')
 
-    # Show waveform
+    # Waveform
     st.subheader("Waveform")
-    fig_wave, ax = plt.subplots()
-    librosa.display.waveshow(y, sr=sr, ax=ax)
-    ax.set_title("Waveform")
+    fig_wave, ax1 = plt.subplots()
+    librosa.display.waveshow(y, sr=sr, ax=ax1)
+    ax1.set_title("Waveform")
     st.pyplot(fig_wave)
 
-    # Show spectrogram
+    # Spectrogram
     st.subheader("Spectrogram")
     fig_spec, ax2 = plt.subplots()
     S = librosa.amplitude_to_db(np.abs(librosa.stft(y)), ref=np.max)
@@ -90,37 +89,37 @@ if uploaded_file is not None:
     ax2.set_title("Spectrogram")
     st.pyplot(fig_spec)
 
-    # Feature extraction
+    # Extract features
     features_scaled, features_raw = extract_features_from_audio(y, sr)
     features_scaled = scaler.transform(features_scaled)
 
-    # Radar chart for feature visualization
+    # Radar/line plot
     st.subheader("🎛️ Feature Overview")
     radar_labels = ['Chroma', 'RMS', 'Centroid', 'Bandwidth', 'Roll-off', 'ZCR'] + [f"MFCC{i}" for i in range(1, 21)]
     radar_df = pd.DataFrame([features_raw], columns=radar_labels)
-    radar_plot = sns.lineplot(data=radar_df.T, legend=False)
-    plt.xticks(rotation=90)
-    st.pyplot(plt.gcf())
-    plt.clf()  # Clear for next plot
+    fig_feat, ax_feat = plt.subplots()
+    sns.lineplot(data=radar_df.T, ax=ax_feat, legend=False)
+    ax_feat.set_xticklabels(radar_labels, rotation=90)
+    st.pyplot(fig_feat)
+    plt.clf()
 
-    # Model selection
+    # Model choice
     model_choice = st.selectbox("Choose a model", list(model_files.keys()))
     model_path = os.path.join(MODELS_DIR, model_files[model_choice])
     with open(model_path, "rb") as f:
         model = pickle.load(f)
 
-    # Prediction
     if st.button("Predict Genre"):
         pred = model.predict(features_scaled)
         genre = encoder.inverse_transform(pred)[0]
-    st.balloons()
+        st.balloons()
         st.success(f"🎧 Predicted Genre: **{genre.upper()}**")
 
         # Add fun fact
         fact = genre_facts.get(genre.lower(), "🎶 Enjoy the rhythm!")
         st.info(f"**Did you know?** {fact}")
 
-        # Confidence scores
+        # Confidence plot
         if hasattr(model, "predict_proba"):
             proba = model.predict_proba(features_scaled)[0]
             conf_df = pd.DataFrame({
@@ -130,31 +129,18 @@ if uploaded_file is not None:
             st.subheader("📊 Confidence Levels")
             st.bar_chart(conf_df.set_index("Genre"))
 
-        # Save prediction in session state
+        # Save to session state
         st.session_state.history.append({
             "File": uploaded_file.name,
             "Model": model_choice,
             "Predicted Genre": genre,
         })
 
-        # Display download
-        all_features = features_raw[0] if isinstance(features_raw, list) else features_raw
-        csv_data = pd.DataFrame([np.append(all_features, genre)], columns=[f"Feature_{i}" for i in range(len(all_features))] + ["Predicted Genre"])
+        # Download button
+        csv_data = pd.DataFrame([np.append(features_raw, genre)], columns=[f"Feature_{i}" for i in range(len(features_raw))] + ["Predicted Genre"])
         st.download_button("⬇️ Download Features & Prediction", csv_data.to_csv(index=False), file_name="prediction_features.csv", mime="text/csv")
-        if st.session_state.history:
-            st.subheader("📝 Past Predictions This Session")
-            st.table(pd.DataFrame(st.session_state.history))
 
-
-        # Confidence (if available)
-        if hasattr(model, "predict_proba"):
-            proba = model.predict_proba(features_scaled)[0]
-            conf_df = pd.DataFrame({
-                "Genre": encoder.inverse_transform(np.arange(len(proba))),
-                "Confidence": proba
-            }).sort_values("Confidence", ascending=False)
-
-            st.subheader("📊 Confidence Levels")
-            st.bar_chart(conf_df.set_index("Genre"))
-
-    st.sidebar.info("👈 Choose a model and hit predict!")
+# Show history
+if st.session_state.history:
+    st.subheader("📝 Past Predictions This Session")
+    st.table(pd.DataFrame(st.session_state.history))
