@@ -1,8 +1,12 @@
 import streamlit as st
 import librosa
+import librosa.display
 import numpy as np
 import pickle
 import os
+import matplotlib.pyplot as plt
+import seaborn as sns
+import pandas as pd
 
 # Load models
 MODELS_DIR = "models"
@@ -20,7 +24,6 @@ with open(os.path.join(MODELS_DIR, "label_encoder.pkl"), "rb") as f:
 
 # Feature extractor
 def extract_features_from_audio(y, sr):
-    # Pad or trim
     if len(y) < sr * 30:
         y = np.pad(y, (0, sr * 30 - len(y)))
     else:
@@ -34,27 +37,71 @@ def extract_features_from_audio(y, sr):
         np.mean(librosa.feature.spectral_rolloff(y=y, sr=sr)),
         np.mean(librosa.feature.zero_crossing_rate(y))
     ]
-
+    
     mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=20)
     features.extend([np.mean(mfcc[i]) for i in range(20)])
 
-    return np.array(features).reshape(1, -1)
+    return np.array(features).reshape(1, -1), features  # Returning full feature list
 
 # Streamlit UI
 st.set_page_config(page_title="🎶 Music Genre Classifier", layout="centered")
 st.title("🎵 Music Genre Classifier App")
 st.write("Upload a `.wav` file and choose a model to predict the music genre.")
+# Genre fun facts / definitions
+genre_facts = {
+    "rock": "🎸 Rock music often revolves around the electric guitar, and it originated in the 1950s.",
+    "pop": "🎤 Pop music is catchy and often features simple lyrics and strong rhythms.",
+    "classical": "🎻 Classical music is known for its complex compositions and orchestration.",
+    "hiphop": "🎧 Hip-hop emphasizes rhythm, rhyme, and street culture.",
+    "jazz": "🎷 Jazz features improvisation and swing notes, originating in the early 20th century.",
+    "metal": "🤘 Metal is loud, aggressive, and often features powerful vocals and distorted guitars.",
+    "country": "🪕 Country music blends folk and blues, with themes of love, heartbreak, and rural life.",
+    "blues": "🎼 Blues is known for its soulful and melancholic sound and originated in the Deep South.",
+    "reggae": "🌴 Reggae is a Jamaican genre characterized by offbeat rhythms and laid-back vibes.",
+    "disco": "🕺 Disco is dance music from the 1970s with four-on-the-floor beats and funky basslines."
+}
 
-# File uploader
+# Initialize past prediction history
+if "history" not in st.session_state:
+    st.session_state.history = []
+
+
+
+
 uploaded_file = st.file_uploader("Upload an audio file", type=["wav"])
 
 if uploaded_file is not None:
     y, sr = librosa.load(uploaded_file, sr=None)
     st.audio(uploaded_file, format='audio/wav')
 
+    # Show waveform
+    st.subheader("Waveform")
+    fig_wave, ax = plt.subplots()
+    librosa.display.waveshow(y, sr=sr, ax=ax)
+    ax.set_title("Waveform")
+    st.pyplot(fig_wave)
+
+    # Show spectrogram
+    st.subheader("Spectrogram")
+    fig_spec, ax2 = plt.subplots()
+    S = librosa.amplitude_to_db(np.abs(librosa.stft(y)), ref=np.max)
+    img = librosa.display.specshow(S, sr=sr, x_axis='time', y_axis='log', ax=ax2)
+    fig_spec.colorbar(img, ax=ax2, format="%+2.0f dB")
+    ax2.set_title("Spectrogram")
+    st.pyplot(fig_spec)
+
     # Feature extraction
-    features = extract_features_from_audio(y, sr)
-    features_scaled = scaler.transform(features)
+    features_scaled, features_raw = extract_features_from_audio(y, sr)
+    features_scaled = scaler.transform(features_scaled)
+
+    # Radar chart for feature visualization
+    st.subheader("🎛️ Feature Overview")
+    radar_labels = ['Chroma', 'RMS', 'Centroid', 'Bandwidth', 'Roll-off', 'ZCR'] + [f"MFCC{i}" for i in range(1, 21)]
+    radar_df = pd.DataFrame([features_raw], columns=radar_labels)
+    radar_plot = sns.lineplot(data=radar_df.T, legend=False)
+    plt.xticks(rotation=90)
+    st.pyplot(plt.gcf())
+    plt.clf()  # Clear for next plot
 
     # Model selection
     model_choice = st.selectbox("Choose a model", list(model_files.keys()))
@@ -66,5 +113,48 @@ if uploaded_file is not None:
     if st.button("Predict Genre"):
         pred = model.predict(features_scaled)
         genre = encoder.inverse_transform(pred)[0]
+                st.balloons()
         st.success(f"🎧 Predicted Genre: **{genre.upper()}**")
 
+        # Add fun fact
+        fact = genre_facts.get(genre.lower(), "🎶 Enjoy the rhythm!")
+        st.info(f"**Did you know?** {fact}")
+
+        # Confidence scores
+        if hasattr(model, "predict_proba"):
+            proba = model.predict_proba(features_scaled)[0]
+            conf_df = pd.DataFrame({
+                "Genre": encoder.inverse_transform(np.arange(len(proba))),
+                "Confidence": proba
+            }).sort_values("Confidence", ascending=False)
+            st.subheader("📊 Confidence Levels")
+            st.bar_chart(conf_df.set_index("Genre"))
+
+        # Save prediction in session state
+        st.session_state.history.append({
+            "File": uploaded_file.name,
+            "Model": model_choice,
+            "Predicted Genre": genre,
+        })
+
+        # Display download
+        all_features = features_raw[0] if isinstance(features_raw, list) else features_raw
+        csv_data = pd.DataFrame([np.append(all_features, genre)], columns=[f"Feature_{i}" for i in range(len(all_features))] + ["Predicted Genre"])
+        st.download_button("⬇️ Download Features & Prediction", csv_data.to_csv(index=False), file_name="prediction_features.csv", mime="text/csv")
+        if st.session_state.history:
+            st.subheader("📝 Past Predictions This Session")
+            st.table(pd.DataFrame(st.session_state.history))
+
+
+        # Confidence (if available)
+        if hasattr(model, "predict_proba"):
+            proba = model.predict_proba(features_scaled)[0]
+            conf_df = pd.DataFrame({
+                "Genre": encoder.inverse_transform(np.arange(len(proba))),
+                "Confidence": proba
+            }).sort_values("Confidence", ascending=False)
+
+            st.subheader("📊 Confidence Levels")
+            st.bar_chart(conf_df.set_index("Genre"))
+
+    st.sidebar.info("👈 Choose a model and hit predict!")
